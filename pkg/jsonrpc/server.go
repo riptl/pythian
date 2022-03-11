@@ -14,9 +14,11 @@ import (
 )
 
 type Server struct {
-	Log      *zap.Logger
-	Upgrader websocket.Upgrader
-	Handler  Handler
+	Log            *zap.Logger
+	Upgrader       websocket.Upgrader
+	Handler        Handler
+	ReadTimeout    time.Duration // max time client can spend between creating a request and finish uploading it
+	MaxRequestSize uint
 }
 
 func NewServer(h Handler) *Server {
@@ -25,7 +27,9 @@ func NewServer(h Handler) *Server {
 		Upgrader: websocket.Upgrader{
 			HandshakeTimeout: 5 * time.Second,
 		},
-		Handler: h,
+		Handler:        h,
+		ReadTimeout:    3 * time.Second,
+		MaxRequestSize: 128000,
 	}
 }
 
@@ -47,7 +51,7 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 func (s *Server) ServePOST(rw http.ResponseWriter, req *http.Request) {
 	// Read request.
-	data, err := io.ReadAll(req.Body)
+	data, err := io.ReadAll(io.LimitReader(req.Body, int64(s.MaxRequestSize)))
 	if err != nil {
 		return
 	}
@@ -73,7 +77,7 @@ func (s *Server) ServeWebSocket(rw http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		return
 	}
-	newServerConn(conn, s.getLog(req), s.Handler).run(req.Context())
+	newServerConn(conn, s.getLog(req), s).run(req.Context())
 }
 
 func (s *Server) getLog(req *http.Request) *zap.Logger {
@@ -82,18 +86,18 @@ func (s *Server) getLog(req *http.Request) *zap.Logger {
 
 // serverConn manages the server-side of a single connection.
 type serverConn struct {
-	conn    *websocket.Conn
-	out     chan *websocket.PreparedMessage
-	log     *zap.Logger
-	handler Handler
+	conn   *websocket.Conn
+	out    chan *websocket.PreparedMessage
+	log    *zap.Logger
+	server *Server
 }
 
-func newServerConn(conn *websocket.Conn, log *zap.Logger, handler Handler) *serverConn {
+func newServerConn(conn *websocket.Conn, log *zap.Logger, server *Server) *serverConn {
 	return &serverConn{
-		conn:    conn,
-		out:     make(chan *websocket.PreparedMessage),
-		log:     log,
-		handler: handler,
+		conn:   conn,
+		out:    make(chan *websocket.PreparedMessage),
+		log:    log,
+		server: server,
 	}
 }
 
@@ -114,17 +118,24 @@ func (h *serverConn) readLoop(ctx context.Context) error {
 	defer h.conn.Close()
 	for {
 		// Read and parse request.
-		_, data, err := h.conn.ReadMessage()
+		_, rd, err := h.conn.NextReader()
 		if err != nil {
 			return err
 		}
+		_ = h.conn.SetReadDeadline(time.Now().Add(h.server.ReadTimeout))
+		data, err := io.ReadAll(io.LimitReader(rd, int64(h.server.MaxRequestSize)))
+		if err != nil {
+			return err
+		}
+		_ = h.conn.SetReadDeadline(time.Time{}) // no limit
+
 		reqs, isBatch, err := ParseRequest(data)
 		if err != nil {
 			h.writeMessage(ctx, NewParseErrorResponse(err))
 			continue
 		}
 		// Execute requests.
-		respData, err := HandleRequests(ctx, h.handler, nil, reqs, isBatch)
+		respData, err := HandleRequests(ctx, h.server.Handler, nil, reqs, isBatch)
 		if err != nil {
 			return fmt.Errorf("failed to marshal results: %w", err) // irrecoverable error
 		}
