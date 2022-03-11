@@ -27,16 +27,16 @@ func newRPCHandler(client *pyth.Client) *rpcHandler {
 		Mux:    mux,
 		client: client,
 	}
-	mux.HandleFunc("get_product", h.getProduct)
-	mux.HandleFunc("get_all_products", h.getAllProducts)
+	mux.HandleFunc("get_product_list", h.handleGetProductList)
+	mux.HandleFunc("get_product", h.handleGetProduct)
+	mux.HandleFunc("get_all_products", h.handleGetAllProducts)
 	return h
 }
 
-func (h *rpcHandler) getAllProducts(ctx context.Context, req jsonrpc.Request, _ jsonrpc.Requester) *jsonrpc.Response {
-	// Retrieve data from chain.
+func (h *rpcHandler) getAllProductsAndPrices(ctx context.Context) ([]pyth.ProductAccountEntry, map[solana.PublicKey][]pyth.PriceAccountEntry, error) {
 	products, err := h.client.GetAllProductAccounts(ctx, rpc.CommitmentConfirmed)
 	if err != nil {
-		return jsonrpc.NewErrorStringResponse(req.ID, rpcErrNotReady, "failed to get products: "+err.Error())
+		return nil, nil, err
 	}
 	priceKeys := make([]solana.PublicKey, 0, len(products))
 	for _, product := range products {
@@ -46,23 +46,40 @@ func (h *rpcHandler) getAllProducts(ctx context.Context, req jsonrpc.Request, _ 
 	}
 	prices, err := h.client.GetPriceAccountsRecursive(ctx, rpc.CommitmentConfirmed, priceKeys...)
 	if err != nil {
-		return jsonrpc.NewErrorStringResponse(req.ID, rpcErrNotReady, "failed to get prices: "+err.Error())
+		return nil, nil, err
 	}
-
-	// Transform to JSON format.
 	pricesPerProduct := make(map[solana.PublicKey][]pyth.PriceAccountEntry)
 	for _, price := range prices {
 		pricesPerProduct[price.Product] = append(pricesPerProduct[price.Product], price)
+	}
+	return products, pricesPerProduct, nil
+}
+
+func (h *rpcHandler) handleGetProductList(ctx context.Context, req jsonrpc.Request, _ jsonrpc.Requester) *jsonrpc.Response {
+	products, pricesPerProduct, err := h.getAllProductsAndPrices(ctx)
+	if err != nil {
+		return jsonrpc.NewErrorStringResponse(req.ID, rpcErrNotReady, "failed to get products: "+err.Error())
 	}
 	products2 := make([]productAccount, len(products))
 	for i, prod := range products {
 		products2[i] = productToJSON(prod, pricesPerProduct[prod.Pubkey])
 	}
-
 	return jsonrpc.NewResultResponse(req.ID, products2)
 }
 
-func (h *rpcHandler) getProduct(ctx context.Context, req jsonrpc.Request, _ jsonrpc.Requester) *jsonrpc.Response {
+func (h *rpcHandler) handleGetAllProducts(ctx context.Context, req jsonrpc.Request, _ jsonrpc.Requester) *jsonrpc.Response {
+	products, pricesPerProduct, err := h.getAllProductsAndPrices(ctx)
+	if err != nil {
+		return jsonrpc.NewErrorStringResponse(req.ID, rpcErrNotReady, "failed to get products: "+err.Error())
+	}
+	products2 := make([]productAccountDetail, len(products))
+	for i, prod := range products {
+		products2[i] = productToDetailJSON(prod, pricesPerProduct[prod.Pubkey])
+	}
+	return jsonrpc.NewResultResponse(req.ID, products2)
+}
+
+func (h *rpcHandler) handleGetProduct(ctx context.Context, req jsonrpc.Request, _ jsonrpc.Requester) *jsonrpc.Response {
 	// Decode params.
 	var params struct {
 		Account solana.PublicKey `json:"account"`
@@ -85,32 +102,45 @@ func (h *rpcHandler) getProduct(ctx context.Context, req jsonrpc.Request, _ json
 		return jsonrpc.NewErrorStringResponse(req.ID, rpcErrNotReady, "failed to get price accs: "+err.Error())
 	}
 
-	return jsonrpc.NewResultResponse(req.ID, productToJSON(entry, prices))
+	return jsonrpc.NewResultResponse(req.ID, productToDetailJSON(entry, prices))
 }
 
 func productToJSON(product pyth.ProductAccountEntry, prices []pyth.PriceAccountEntry) productAccount {
 	acc := productAccount{
-		Account:       product.Pubkey.String(),
-		AttrDict:      product.Attrs.KVs(),
-		PriceAccounts: make([]priceAccount, len(prices)),
+		Account:  product.Pubkey.String(),
+		AttrDict: product.Attrs.KVs(),
+		Prices:   make([]priceAccount, len(prices)),
 	}
 	for i, price := range prices {
-		acc.PriceAccounts[i] = priceToJSON(price)
+		acc.Prices[i] = priceToJSON(price)
 	}
 	return acc
 }
 
 func priceToJSON(price pyth.PriceAccountEntry) priceAccount {
-	var priceType string
-	switch price.PriceType {
-	case 1:
-		priceType = "price"
-	default:
-		priceType = "unknown"
-	}
-	acc := priceAccount{
+	return priceAccount{
 		Account:       price.Pubkey.String(),
-		PriceType:     priceType,
+		PriceExponent: int(price.Exponent),
+		PriceType:     priceTypeString(price.PriceType),
+	}
+}
+
+func productToDetailJSON(product pyth.ProductAccountEntry, prices []pyth.PriceAccountEntry) productAccountDetail {
+	acc := productAccountDetail{
+		Account:       product.Pubkey.String(),
+		AttrDict:      product.Attrs.KVs(),
+		PriceAccounts: make([]priceAccountDetail, len(prices)),
+	}
+	for i, price := range prices {
+		acc.PriceAccounts[i] = priceToDetailJSON(price)
+	}
+	return acc
+}
+
+func priceToDetailJSON(price pyth.PriceAccountEntry) priceAccountDetail {
+	acc := priceAccountDetail{
+		Account:       price.Pubkey.String(),
+		PriceType:     priceTypeString(price.PriceType),
 		PriceExponent: int(price.Exponent),
 		Status:        statusString(price.Agg.Status),
 		Price:         price.Agg.Price,
@@ -140,6 +170,15 @@ func priceToJSON(price pyth.PriceAccountEntry) priceAccount {
 	return acc
 }
 
+func priceTypeString(priceType uint32) string {
+	switch priceType {
+	case 1:
+		return "price"
+	default:
+		return "unknown"
+	}
+}
+
 func statusString(status uint32) string {
 	switch status {
 	case pyth.PriceStatusTrading:
@@ -154,12 +193,24 @@ func statusString(status uint32) string {
 }
 
 type productAccount struct {
-	Account       string            `json:"account"`
-	AttrDict      map[string]string `json:"attr_dict"`
-	PriceAccounts []priceAccount    `json:"price_accounts"`
+	Account  string            `json:"account"`
+	AttrDict map[string]string `json:"attr_dict"`
+	Prices   []priceAccount    `json:"price"`
 }
 
 type priceAccount struct {
+	Account       string `json:"account"`
+	PriceExponent int    `json:"price_exponent"`
+	PriceType     string `json:"price_type"`
+}
+
+type productAccountDetail struct {
+	Account       string               `json:"account"`
+	AttrDict      map[string]string    `json:"attr_dict"`
+	PriceAccounts []priceAccountDetail `json:"price_accounts"`
+}
+
+type priceAccountDetail struct {
 	Account           string             `json:"account"`
 	PriceType         string             `json:"price_type"`
 	PriceExponent     int                `json:"price_exponent"`
