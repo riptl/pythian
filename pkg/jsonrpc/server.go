@@ -1,0 +1,172 @@
+package jsonrpc
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
+)
+
+type Server struct {
+	Log      *zap.Logger
+	Upgrader websocket.Upgrader
+	Handler  Handler
+}
+
+func NewServer(h Handler) *Server {
+	return &Server{
+		Log: zap.NewNop(),
+		Upgrader: websocket.Upgrader{
+			HandshakeTimeout: 5 * time.Second,
+		},
+		Handler: h,
+	}
+}
+
+func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	switch req.Method {
+	case http.MethodGet:
+		s.ServeWebSocket(rw, req)
+	case http.MethodPost:
+		s.ServePOST(rw, req)
+	case http.MethodOptions:
+		rw.Header().Set("allow", "OPTIONS, GET, POST")
+		rw.Header().Set("access-control-request-method", "OPTIONS, GET, POST")
+		rw.Header().Set("access-control-request-headers", "content-type")
+		rw.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(rw, "Only JSON-RPC 2.0 over HTTP and WebSocket supported", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) ServePOST(rw http.ResponseWriter, req *http.Request) {
+	// Read request.
+	data, err := io.ReadAll(req.Body)
+	if err != nil {
+		return
+	}
+	reqs, isBatch, err := ParseRequest(data)
+	if err != nil {
+		http.Error(rw, "Bad request", http.StatusBadRequest)
+		return
+	}
+	// Execute requests.
+	respData, err := HandleRequests(req.Context(), s.Handler, nil, reqs, isBatch)
+	if err != nil {
+		s.Log.Error("Failed to marshal results", zap.Error(err))
+		http.Error(rw, "internal server error", http.StatusInternalServerError)
+		return // irrecoverable error
+	}
+	rw.Header().Set("content-type", "application/json; charset=utf-8")
+	rw.WriteHeader(http.StatusOK)
+	_, _ = rw.Write(respData)
+}
+
+func (s *Server) ServeWebSocket(rw http.ResponseWriter, req *http.Request) {
+	conn, err := s.Upgrader.Upgrade(rw, req, http.Header{})
+	if err != nil {
+		return
+	}
+	newServerConn(conn, s.getLog(req), s.Handler).run(req.Context())
+}
+
+func (s *Server) getLog(req *http.Request) *zap.Logger {
+	return s.Log.With(zap.String("http.client", req.RemoteAddr))
+}
+
+// serverConn manages the server-side of a single connection.
+type serverConn struct {
+	conn    *websocket.Conn
+	out     chan *websocket.PreparedMessage
+	log     *zap.Logger
+	handler Handler
+}
+
+func newServerConn(conn *websocket.Conn, log *zap.Logger, handler Handler) *serverConn {
+	return &serverConn{
+		conn:    conn,
+		out:     make(chan *websocket.PreparedMessage),
+		log:     log,
+		handler: handler,
+	}
+}
+
+func (h *serverConn) run(ctx context.Context) {
+	defer close(h.out)
+
+	group, ctx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		return h.writeLoop(ctx)
+	})
+	group.Go(func() error {
+		return h.readLoop(ctx)
+	})
+	_ = group.Wait()
+}
+
+func (h *serverConn) readLoop(ctx context.Context) error {
+	defer h.conn.Close()
+	for {
+		// Read and parse request.
+		_, data, err := h.conn.ReadMessage()
+		if err != nil {
+			return err
+		}
+		reqs, isBatch, err := ParseRequest(data)
+		if err != nil {
+			h.writeMessage(ctx, NewParseErrorResponse(err))
+			continue
+		}
+		// Execute requests.
+		respData, err := HandleRequests(ctx, h.handler, nil, reqs, isBatch)
+		if err != nil {
+			return fmt.Errorf("failed to marshal results: %w", err) // irrecoverable error
+		}
+		respMsg, err := websocket.NewPreparedMessage(websocket.TextMessage, respData)
+		if err != nil {
+			return fmt.Errorf("failed to prepare response message: %w", err)
+		}
+		h.writeMessage(ctx, respMsg)
+	}
+}
+
+func (h *serverConn) writeMessage(ctx context.Context, data interface{}) {
+	buf, err := json.Marshal(data)
+	if err != nil {
+		h.log.Error("Failed to marshal message", zap.Error(err))
+		return
+	}
+	msg, err := websocket.NewPreparedMessage(websocket.TextMessage, buf)
+	if err != nil {
+		h.log.Error("Failed to prepare WebSocket message", zap.Error(err))
+		return
+	}
+
+	select {
+	case <-ctx.Done():
+	case h.out <- msg:
+	}
+}
+
+func (h *serverConn) writeLoop(ctx context.Context) error {
+	defer h.conn.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case msg, ok := <-h.out:
+			if !ok {
+				return nil
+			}
+			if err := h.conn.WritePreparedMessage(msg); err != nil {
+				return err
+			}
+		}
+	}
+}
