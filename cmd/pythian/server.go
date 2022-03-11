@@ -11,6 +11,7 @@ import (
 	"go.blockdaemon.com/pyth"
 	"go.blockdaemon.com/pythian/cmd"
 	"go.blockdaemon.com/pythian/pkg/jsonrpc"
+	"go.blockdaemon.com/pythian/pkg/server"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -61,7 +62,7 @@ func runServer(_ *cobra.Command, _ []string) {
 	cobra.CheckErr(err)
 	pythClient := pyth.NewClient(pythEnv, solanaRpcUrl.String(), solanaWsUrl.String())
 
-	rpc := newRPCHandler(pythClient)
+	rpc := server.NewHandler(pythClient)
 
 	group.Go(func() error {
 		log.Info("Starting HTTP server", zap.String("listen", serverListenFlag))
