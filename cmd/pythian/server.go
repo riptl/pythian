@@ -7,11 +7,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	solana_rpc "github.com/gagliardetto/solana-go/rpc"
 	"github.com/spf13/cobra"
 	"go.blockdaemon.com/pyth"
 	"go.blockdaemon.com/pythian/cmd"
-	"go.blockdaemon.com/pythian/pkg/jsonrpc"
-	"go.blockdaemon.com/pythian/pkg/server"
+	"go.blockdaemon.com/pythian/jsonrpc"
+	"go.blockdaemon.com/pythian/schedule"
+	pythian_server "go.blockdaemon.com/pythian/server"
+	"go.blockdaemon.com/pythian/signer"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -31,41 +34,74 @@ var (
 func init() {
 	rootCmd.AddCommand(&serverCmd)
 	serverFlags.AddFlagSet(cmd.FlagSetRPC)
+	serverFlags.AddFlagSet(cmd.FlagSetSigner)
 	serverFlags.StringVar(&serverListenFlag, "listen", ":8090", "Listen address")
 }
 
 func runServer(_ *cobra.Command, _ []string) {
-	log.Info("Starting pythian server")
-	defer log.Info("Exiting now")
+	log.Info("Initializing")
+	defer log.Info("Shutdown completed")
 
+	// Create root application context.
 	ctx := context.Background()
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	group, ctx := errgroup.WithContext(ctx)
 
-	// Create Pyth client.
-	var pythEnv pyth.Env
-	switch *cmd.FlagNetwork {
-	case "devnet":
-		pythEnv = pyth.Devnet
-	case "testnet":
-		pythEnv = pyth.Testnet
-	case "mainnet":
-		pythEnv = pyth.Mainnet
-	default:
-		cobra.CheckErr("unsupported network: " + *cmd.FlagNetwork)
-	}
+	// Print message when exit is about to occur.
+	group.Go(func() error {
+		defer log.Info("Exit requested")
+		<-ctx.Done()
+		return nil
+	})
 
+	// Create RPC/WebSocket client to Pyth on-chain program.
 	solanaRpcUrl, err := cmd.GetRPCFlag()
 	cobra.CheckErr(err)
 	solanaWsUrl, err := cmd.GetWSFlag()
 	cobra.CheckErr(err)
+	pythEnv, err := cmd.GetPythEnv()
+	cobra.CheckErr(err)
 	pythClient := pyth.NewClient(pythEnv, solanaRpcUrl.String(), solanaWsUrl.String())
 
-	rpc := server.NewHandler(pythClient)
+	// Create transaction signer.
+	txSigner, err := signer.NewSigner(cmd.GetPrivateKeyPath(), pythEnv.Program)
+	cobra.CheckErr(err)
+	log.Info("Signer initialized", zap.Stringer("pubkey", txSigner.Pubkey()))
 
+	// Create recent block hash monitor.
+	log.Info("Starting block hash monitor")
+	blockhashes, err := schedule.NewBlockHashMonitor(ctx, solana_rpc.New(solanaRpcUrl.String()))
+	if err != nil {
+		log.Fatal("Failed to set up blockhash monitor", zap.Error(err))
+	}
+	blockhashes.Log = log.Named("blockhash")
 	group.Go(func() error {
-		log.Info("Starting HTTP server", zap.String("listen", serverListenFlag))
+		defer log.Info("Stopped block hash monitor")
+		blockhashes.Run(ctx)
+		return nil
+	})
+
+	// Create slot monitor.
+	log.Info("Starting slot monitor")
+	slots := schedule.NewSchedule(solanaWsUrl.String())
+	slots.Log = log.Named("slots")
+	group.Go(func() error {
+		defer log.Info("Stopped slot monitor")
+		return slots.Run(ctx)
+	})
+	group.Go(func() error {
+		for range slots.Updates() {
+		}
+		return nil
+	})
+
+	// Create Pythian JSON-RPC handler.
+	rpc := pythian_server.NewHandler(pythClient, txSigner, blockhashes)
+
+	// Start HTTP server.
+	log.Info("Starting HTTP server", zap.String("listen", serverListenFlag))
+	group.Go(func() error {
 		defer log.Info("Stopped HTTP server")
 
 		rpcServer := jsonrpc.NewServer(rpc)
@@ -84,9 +120,10 @@ func runServer(_ *cobra.Command, _ []string) {
 		}
 	})
 
+	log.Info("Pythian running 🔮")
+
+	// Wait for all modules to exit.
 	if err := group.Wait(); err != nil {
 		log.Error("Crashed", zap.Error(err))
-	} else {
-		log.Info("Shutting down")
 	}
 }

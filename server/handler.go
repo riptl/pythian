@@ -8,7 +8,9 @@ import (
 	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/mitchellh/mapstructure"
 	"go.blockdaemon.com/pyth"
-	"go.blockdaemon.com/pythian/pkg/jsonrpc"
+	"go.blockdaemon.com/pythian/jsonrpc"
+	"go.blockdaemon.com/pythian/schedule"
+	"go.blockdaemon.com/pythian/signer"
 )
 
 const (
@@ -18,18 +20,23 @@ const (
 
 type Handler struct {
 	*jsonrpc.Mux
-	client *pyth.Client
+	client    *pyth.Client
+	signer    *signer.Signer
+	blockhash *schedule.BlockHashMonitor
 }
 
-func NewHandler(client *pyth.Client) *Handler {
+func NewHandler(client *pyth.Client, signer *signer.Signer, blockhash *schedule.BlockHashMonitor) *Handler {
 	mux := jsonrpc.NewMux()
 	h := &Handler{
-		Mux:    mux,
-		client: client,
+		Mux:       mux,
+		client:    client,
+		signer:    signer,
+		blockhash: blockhash,
 	}
 	mux.HandleFunc("get_product_list", h.handleGetProductList)
 	mux.HandleFunc("get_product", h.handleGetProduct)
 	mux.HandleFunc("get_all_products", h.handleGetAllProducts)
+	mux.HandleFunc("update_price", h.handleUpdatePrice)
 	return h
 }
 
@@ -103,4 +110,43 @@ func (h *Handler) handleGetProduct(ctx context.Context, req jsonrpc.Request, _ j
 	}
 
 	return jsonrpc.NewResultResponse(req.ID, productToDetailJSON(entry, prices))
+}
+
+func (h *Handler) handleUpdatePrice(_ context.Context, req jsonrpc.Request, _ jsonrpc.Requester) *jsonrpc.Response {
+	// Decode params.
+	var params struct {
+		Account solana.PublicKey `json:"account"`
+		Price   int64            `json:"price"`
+		Conf    uint64           `json:"conf"`
+		Status  string           `json:"status"`
+	}
+	if err := mapstructure.Decode(req.Params, &params); err != nil {
+		return jsonrpc.NewInvalidParamsResponse(req.ID)
+	}
+	if params.Account.IsZero() || params.Price == 0 || params.Conf == 0 || params.Status == "" {
+		return jsonrpc.NewInvalidParamsResponse(req.ID)
+	}
+
+	// TODO(richard): Defer updates and publish according to schedule.
+	tx, err := solana.NewTransactionBuilder().
+		AddInstruction(
+			pyth.NewInstructionBuilder(h.client.Env.Program).
+				UpdPrice(h.signer.Pubkey(), params.Account, pyth.CommandUpdPrice{
+					Status:  statusFromString(params.Status),
+					Price:   params.Price,
+					Conf:    params.Conf,
+					PubSlot: 0, // TODO
+				}),
+		).
+		SetRecentBlockHash(h.blockhash.GetRecentBlockHash().Blockhash).
+		Build()
+	if err != nil {
+		return jsonrpc.NewErrorStringResponse(req.ID, rpcErrNotReady, "failed to assemble update_price tx: "+err.Error())
+	}
+
+	if err := h.signer.SignPriceUpdate(tx); err != nil {
+		return jsonrpc.NewErrorStringResponse(req.ID, rpcErrNotReady, "failed to sign update_price tx: "+err.Error())
+	}
+
+	return jsonrpc.NewResultResponse(req.ID, 0)
 }

@@ -115,7 +115,7 @@ func (h *serverConn) run(ctx context.Context) {
 }
 
 func (h *serverConn) readLoop(ctx context.Context) error {
-	defer h.conn.Close()
+	defer h.close()
 	for {
 		// Read and parse request.
 		_, rd, err := h.conn.NextReader()
@@ -166,7 +166,7 @@ func (h *serverConn) writeMessage(ctx context.Context, data interface{}) {
 }
 
 func (h *serverConn) writeLoop(ctx context.Context) error {
-	defer h.conn.Close()
+	defer h.close()
 	for {
 		select {
 		case <-ctx.Done():
@@ -180,4 +180,8 @@ func (h *serverConn) writeLoop(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (h *serverConn) close() {
+	_ = h.conn.Close()
 }

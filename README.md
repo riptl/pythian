@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>Pythian</h1>
+  <h1>Pythian 🔮</h1>
   <p>
     <strong>Research implementation of the Pyth data publisher</strong>
   </p>

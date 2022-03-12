@@ -61,7 +61,7 @@ func priceToJSON(price pyth.PriceAccountEntry) priceAccount {
 	return priceAccount{
 		Account:       price.Pubkey.String(),
 		PriceExponent: int(price.Exponent),
-		PriceType:     priceTypeString(price.PriceType),
+		PriceType:     priceTypeToString(price.PriceType),
 	}
 }
 
@@ -80,9 +80,9 @@ func productToDetailJSON(product pyth.ProductAccountEntry, prices []pyth.PriceAc
 func priceToDetailJSON(price pyth.PriceAccountEntry) priceAccountDetail {
 	acc := priceAccountDetail{
 		Account:       price.Pubkey.String(),
-		PriceType:     priceTypeString(price.PriceType),
+		PriceType:     priceTypeToString(price.PriceType),
 		PriceExponent: int(price.Exponent),
-		Status:        statusString(price.Agg.Status),
+		Status:        statusToString(price.Agg.Status),
 		Price:         price.Agg.Price,
 		Conf:          int64(price.Agg.Conf),
 		EmaPrice:      price.Twap.Val,
@@ -100,7 +100,7 @@ func priceToDetailJSON(price pyth.PriceAccountEntry) priceAccountDetail {
 		}
 		publishers = append(publishers, publisherAccount{
 			Account: comp.Publisher.String(),
-			Status:  statusString(comp.Latest.Status),
+			Status:  statusToString(comp.Latest.Status),
 			Price:   comp.Latest.Price,
 			Conf:    int64(comp.Latest.Conf),
 			Slot:    comp.Latest.PubSlot,
@@ -110,7 +110,7 @@ func priceToDetailJSON(price pyth.PriceAccountEntry) priceAccountDetail {
 	return acc
 }
 
-func priceTypeString(priceType uint32) string {
+func priceTypeToString(priceType uint32) string {
 	switch priceType {
 	case 1:
 		return "price"
@@ -119,7 +119,7 @@ func priceTypeString(priceType uint32) string {
 	}
 }
 
-func statusString(status uint32) string {
+func statusToString(status uint32) string {
 	switch status {
 	case pyth.PriceStatusTrading:
 		return "trading"
@@ -129,5 +129,18 @@ func statusString(status uint32) string {
 		return "halted"
 	default:
 		return "unknown"
+	}
+}
+
+func statusFromString(status string) uint32 {
+	switch status {
+	case "trading":
+		return pyth.PriceStatusTrading
+	case "auction":
+		return pyth.PriceStatusAuction
+	case "halted":
+		return pyth.PriceStatusHalted
+	default:
+		return pyth.PriceStatusUnknown
 	}
 }
