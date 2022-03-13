@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -87,10 +88,12 @@ func (s *Server) getLog(req *http.Request) *zap.Logger {
 
 // serverConn manages the server-side of a single connection.
 type serverConn struct {
-	conn    *websocket.Conn
+	conn   *websocket.Conn
+	log    *zap.Logger
+	server *Server
+
+	outLock sync.RWMutex
 	out     chan *websocket.PreparedMessage
-	log     *zap.Logger
-	server  *Server
 	onClose chan struct{}
 }
 
@@ -105,7 +108,7 @@ func newServerConn(conn *websocket.Conn, log *zap.Logger, server *Server) *serve
 }
 
 func (h *serverConn) run(ctx context.Context) {
-	defer close(h.out)
+	defer h.dropOut()
 
 	group, ctx := errgroup.WithContext(ctx)
 	group.Go(func() error {
@@ -147,11 +150,9 @@ func (h *serverConn) readLoop(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to marshal results: %w", err) // irrecoverable error
 		}
-		respMsg, err := websocket.NewPreparedMessage(websocket.TextMessage, respData)
-		if err != nil {
-			return fmt.Errorf("failed to prepare response message: %w", err)
+		if len(respData) > 0 {
+			h.writeMessage(ctx, json.RawMessage(respData))
 		}
-		h.writeMessage(ctx, respMsg)
 	}
 }
 
@@ -194,6 +195,14 @@ func (h *serverConn) close() {
 	_ = h.conn.Close()
 }
 
+func (h *serverConn) dropOut() {
+	out := h.out
+	h.outLock.Lock()
+	h.out = nil
+	h.outLock.Unlock()
+	close(out)
+}
+
 // AsyncRequestJSONRPC sends a JSON-RPC notification from server to client.
 //
 // Returns net.ErrClosed if the underlying connection has been closed already.
@@ -217,6 +226,8 @@ func (h *serverConn) AsyncRequestJSONRPC(ctx context.Context, method string, par
 	}
 
 	// Blocking send to writer thread.
+	h.outLock.RLock()
+	defer h.outLock.RUnlock()
 	select {
 	case <-h.onClose:
 		return net.ErrClosed

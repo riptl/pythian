@@ -106,7 +106,7 @@ func (h *Handler) handleGetProduct(ctx context.Context, req jsonrpc.Request, _ j
 	var params struct {
 		Account solana.PublicKey `json:"account"`
 	}
-	if err := mapstructure.Decode(req.Params, &params); err != nil {
+	if err := decodeParams(req.Params, &params); err != nil {
 		return jsonrpc.NewInvalidParamsResponse(req.ID)
 	}
 
@@ -135,7 +135,7 @@ func (h *Handler) handleUpdatePrice(_ context.Context, req jsonrpc.Request, _ js
 		Conf    uint64           `json:"conf"`
 		Status  string           `json:"status"`
 	}
-	if err := mapstructure.Decode(req.Params, &params); err != nil {
+	if err := decodeParams(req.Params, &params); err != nil {
 		return jsonrpc.NewInvalidParamsResponse(req.ID)
 	}
 	if params.Account.IsZero() || params.Price == 0 || params.Conf == 0 || params.Status == "" {
@@ -167,7 +167,7 @@ func (h *Handler) handleSubscribePrice(_ context.Context, req jsonrpc.Request, c
 	var params struct {
 		Account solana.PublicKey `json:"account"`
 	}
-	if err := mapstructure.Decode(req.Params, &params); err != nil {
+	if err := decodeParams(req.Params, &params); err != nil {
 		return jsonrpc.NewInvalidParamsResponse(req.ID)
 	}
 	if params.Account.IsZero() {
@@ -215,7 +215,7 @@ func (h *Handler) handleSubscribePriceSchedule(_ context.Context, req jsonrpc.Re
 	var params struct {
 		Account solana.PublicKey `json:"account"`
 	}
-	if err := mapstructure.Decode(req.Params, &params); err != nil {
+	if err := decodeParams(req.Params, &params); err != nil {
 		return jsonrpc.NewInvalidParamsResponse(req.ID)
 	}
 	if params.Account.IsZero() {
@@ -235,7 +235,7 @@ func (h *Handler) asyncSubscribePriceSchedule(callback jsonrpc.Requester, subID 
 			Subscription: subID,
 		})
 		if errors.Is(err, net.ErrClosed) {
-			unsub()
+			go unsub()
 		} else if err != nil {
 			h.Log.Warn("Failed to deliver async price schedule update", zap.Error(err))
 		}
@@ -252,4 +252,15 @@ func newSubscriptionResponse(reqID interface{}, subID uint64) *jsonrpc.Response 
 
 func (h *Handler) newSubID() uint64 {
 	return atomic.AddUint64(&h.subNonce, 1)
+}
+
+func decodeParams(params interface{}, out interface{}) error {
+	dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		DecodeHook: mapstructure.TextUnmarshallerHookFunc(),
+		Result:     out,
+	})
+	if err != nil {
+		return err
+	}
+	return dec.Decode(params)
 }
