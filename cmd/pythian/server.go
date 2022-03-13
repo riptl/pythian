@@ -63,6 +63,7 @@ func runServer(_ *cobra.Command, _ []string) {
 	pythEnv, err := cmd.GetPythEnv()
 	cobra.CheckErr(err)
 	pythClient := pyth.NewClient(pythEnv, solanaRpcUrl.String(), solanaWsUrl.String())
+	solanaRPC := solana_rpc.New(solanaRpcUrl.String())
 
 	// Create transaction signer.
 	txSigner, err := signer.NewSigner(cmd.GetPrivateKeyPath(), pythEnv.Program)
@@ -71,7 +72,7 @@ func runServer(_ *cobra.Command, _ []string) {
 
 	// Create recent block hash monitor.
 	log.Info("Starting block hash monitor")
-	blockhashes, err := schedule.NewBlockHashMonitor(ctx, solana_rpc.New(solanaRpcUrl.String()))
+	blockhashes, err := schedule.NewBlockHashMonitor(ctx, solanaRPC)
 	if err != nil {
 		log.Fatal("Failed to set up blockhash monitor", zap.Error(err))
 	}
@@ -95,12 +96,12 @@ func runServer(_ *cobra.Command, _ []string) {
 	buffer := schedule.NewBuffer()
 
 	// Create scheduler.
-	sched := schedule.NewScheduler(buffer, blockhashes, txSigner)
+	sched := schedule.NewScheduler(buffer, blockhashes, txSigner, solanaRPC)
 	sched.Log = log.Named("scheduler")
 	log.Info("Starting publish scheduler")
 	group.Go(func() error {
 		defer log.Info("Stopped publish scheduler")
-		sched.Run(slots.Updates())
+		sched.Run(ctx, slots.Updates())
 		return nil
 	})
 
