@@ -51,6 +51,7 @@ func NewHandler(
 	mux.HandleFunc("get_all_products", h.handleGetAllProducts)
 	mux.HandleFunc("update_price", h.handleUpdatePrice)
 	mux.HandleFunc("subscribe_price", h.handleSubscribePrice)
+	mux.HandleFunc("subscribe_price_sched", h.handleSubscribePriceSchedule)
 	return h
 }
 
@@ -201,6 +202,42 @@ func (h *Handler) asyncSubscribePrice(account solana.PublicKey, callback jsonrpc
 			stream.Close()
 		} else if err != nil {
 			h.Log.Warn("Failed to deliver async price update", zap.Error(err))
+		}
+	})
+}
+
+func (h *Handler) handleSubscribePriceSchedule(_ context.Context, req jsonrpc.Request, callback jsonrpc.Requester) *jsonrpc.Response {
+	if req.ID == nil {
+		return nil
+	}
+
+	// Decode params.
+	var params struct {
+		Account solana.PublicKey `json:"account"`
+	}
+	if err := mapstructure.Decode(req.Params, &params); err != nil {
+		return jsonrpc.NewInvalidParamsResponse(req.ID)
+	}
+	if params.Account.IsZero() {
+		return jsonrpc.NewInvalidParamsResponse(req.ID)
+	}
+
+	// Launch new subscription worker.
+	subID := h.newSubID()
+	go h.asyncSubscribePriceSchedule(callback, subID)
+	return newSubscriptionResponse(req.ID, subID)
+}
+
+func (h *Handler) asyncSubscribePriceSchedule(callback jsonrpc.Requester, subID uint64) {
+	var unsub context.CancelFunc
+	unsub = h.slots.Subscribe(func(slot uint64) {
+		err := callback.AsyncRequestJSONRPC(context.Background(), "notify_price_sched", subscriptionUpdate{
+			Subscription: subID,
+		})
+		if errors.Is(err, net.ErrClosed) {
+			unsub()
+		} else if err != nil {
+			h.Log.Warn("Failed to deliver async price schedule update", zap.Error(err))
 		}
 	})
 }

@@ -46,7 +46,7 @@ type publisherAccount struct {
 }
 
 type subscriptionUpdate struct {
-	Result       interface{} `json:"result"`
+	Result       interface{} `json:"result,omitempty"`
 	Subscription uint64      `json:"subscription"`
 }
 

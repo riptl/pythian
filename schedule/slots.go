@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	eventbus "github.com/asaskevich/EventBus"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc/ws"
@@ -18,6 +19,7 @@ type SlotMonitor struct {
 
 	updates  chan *ws.SlotsUpdatesResult
 	lastSlot uint64
+	bus      eventbus.Bus
 }
 
 func NewSlotMonitor(wsURL string) *SlotMonitor {
@@ -26,6 +28,7 @@ func NewSlotMonitor(wsURL string) *SlotMonitor {
 		WebSocketURL: wsURL,
 
 		updates: make(chan *ws.SlotsUpdatesResult, 1),
+		bus:     eventbus.New(),
 	}
 }
 
@@ -108,6 +111,8 @@ func (s *SlotMonitor) readNextUpdate(ctx context.Context, sub *ws.SlotsUpdatesSu
 	}
 	atomic.StoreUint64(&s.lastSlot, update.Slot)
 
+	s.bus.Publish(busKey, update.Slot)
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -120,6 +125,14 @@ func (s *SlotMonitor) readNextUpdate(ctx context.Context, sub *ws.SlotsUpdatesSu
 	return nil
 }
 
+// Subscribe registers a callback function. The returned cancel func
+func (s *SlotMonitor) Subscribe(callback func(uint64)) context.CancelFunc {
+	_ = s.bus.Subscribe(busKey, callback)
+	return func() {
+		_ = s.bus.Unsubscribe(busKey, callback)
+	}
+}
+
 // Updates the single current update channel.
 func (s *SlotMonitor) Updates() <-chan *ws.SlotsUpdatesResult {
 	return s.updates
@@ -129,3 +142,5 @@ func (s *SlotMonitor) Updates() <-chan *ws.SlotsUpdatesResult {
 func (s *SlotMonitor) Slot() uint64 {
 	return atomic.LoadUint64(&s.lastSlot)
 }
+
+const busKey = "" // dummy key for event bus
