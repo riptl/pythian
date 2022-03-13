@@ -45,6 +45,11 @@ type publisherAccount struct {
 	Slot    uint64 `json:"slot"`
 }
 
+type subscriptionUpdate struct {
+	Result       interface{} `json:"result"`
+	Subscription uint64      `json:"subscription"`
+}
+
 type priceUpdate struct {
 	Price     int64  `json:"price"`
 	Conf      uint64 `json:"conf"`

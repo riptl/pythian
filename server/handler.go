@@ -27,7 +27,7 @@ type Handler struct {
 	buffer    *schedule.Buffer
 	publisher solana.PublicKey
 	slots     *schedule.SlotMonitor
-	subNonce  int64
+	subNonce  uint64
 }
 
 func NewHandler(
@@ -174,23 +174,28 @@ func (h *Handler) handleSubscribePrice(_ context.Context, req jsonrpc.Request, c
 	}
 
 	// Launch new subscription worker.
-	go h.asyncSubscribePrice(params.Account, callback)
-	return newSubscriptionResponse(req.ID, h.newSubID())
+	subID := h.newSubID()
+	go h.asyncSubscribePrice(params.Account, callback, subID)
+	return newSubscriptionResponse(req.ID, subID)
 }
 
-func (h *Handler) asyncSubscribePrice(account solana.PublicKey, callback jsonrpc.Requester) {
+func (h *Handler) asyncSubscribePrice(account solana.PublicKey, callback jsonrpc.Requester, subID uint64) {
 	// TODO(richard): This is inefficient, no need to stream copy of all price updates for _each_ subscription.
 	stream := h.client.StreamPriceAccounts()
 	defer stream.Close()
 
 	handler := pyth.NewPriceEventHandler(stream)
 	handler.OnPriceChange(account, func(update pyth.PriceUpdate) {
-		err := callback.AsyncRequestJSONRPC(context.Background(), "notify_price", priceUpdate{
+		price := priceUpdate{
 			Price:     update.CurrentInfo.Price,
 			Conf:      update.CurrentInfo.Conf,
 			Status:    statusToString(update.CurrentInfo.Status),
 			ValidSlot: update.CurrentInfo.PubSlot,
 			PubSlot:   update.CurrentInfo.PubSlot,
+		}
+		err := callback.AsyncRequestJSONRPC(context.Background(), "notify_price", subscriptionUpdate{
+			Result:       &price,
+			Subscription: subID,
 		})
 		if errors.Is(err, net.ErrClosed) {
 			stream.Close()
@@ -200,14 +205,14 @@ func (h *Handler) asyncSubscribePrice(account solana.PublicKey, callback jsonrpc
 	})
 }
 
-func newSubscriptionResponse(reqID interface{}, subID int64) *jsonrpc.Response {
+func newSubscriptionResponse(reqID interface{}, subID uint64) *jsonrpc.Response {
 	var result struct {
-		Subscription int64 `json:"subscription"`
+		Subscription uint64 `json:"subscription"`
 	}
 	result.Subscription = subID
 	return jsonrpc.NewResultResponse(reqID, &result)
 }
 
-func (h *Handler) newSubID() int64 {
-	return atomic.AddInt64(&h.subNonce, 1)
+func (h *Handler) newSubID() uint64 {
+	return atomic.AddUint64(&h.subNonce, 1)
 }
