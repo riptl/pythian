@@ -237,3 +237,7 @@ func (h *serverConn) AsyncRequestJSONRPC(ctx context.Context, method string, par
 		return nil
 	}
 }
+
+func (h *serverConn) Done() <-chan struct{} {
+	return h.onClose
+}

@@ -63,6 +63,7 @@ func runServer(_ *cobra.Command, _ []string) {
 	pythEnv, err := cmd.GetPythEnv()
 	cobra.CheckErr(err)
 	pythClient := pyth.NewClient(pythEnv, solanaRpcUrl.String(), solanaWsUrl.String())
+	pythClient.Log = log.Named("rpc")
 	solanaRPC := solana_rpc.New(solanaRpcUrl.String())
 
 	// Create transaction signer.
@@ -107,6 +108,7 @@ func runServer(_ *cobra.Command, _ []string) {
 
 	// Create Pythian JSON-RPC handler.
 	rpc := pythian_server.NewHandler(pythClient, buffer, txSigner.Pubkey(), slots)
+	rpc.Log = log.Named("server")
 
 	// Start HTTP server.
 	log.Info("Starting HTTP server", zap.String("listen", serverListenFlag))

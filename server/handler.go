@@ -150,7 +150,7 @@ func (h *Handler) handleUpdatePrice(_ context.Context, req jsonrpc.Request, _ js
 		PubSlot: h.slots.Slot(),
 	}
 	ins := pyth.NewInstructionBuilder(h.client.Env.Program).
-		UpdPrice(h.publisher, params.Account, update).(*pyth.Instruction)
+		UpdPrice(h.publisher, params.Account, update)
 
 	// Push instruction to write buffer. (Will be picked up by scheduler)
 	h.buffer.PushUpdate(ins)
@@ -181,6 +181,12 @@ func (h *Handler) handleSubscribePrice(_ context.Context, req jsonrpc.Request, c
 }
 
 func (h *Handler) asyncSubscribePrice(account solana.PublicKey, callback jsonrpc.Requester, subID uint64) {
+	h.Log.Debug("Subscribing to price updates",
+		zap.Stringer("program", h.client.Env.Program),
+		zap.Stringer("price", account))
+	defer h.Log.Debug("Unsubscribing from price updates",
+		zap.Stringer("price", account))
+
 	// TODO(richard): This is inefficient, no need to stream copy of all price updates for _each_ subscription.
 	stream := h.client.StreamPriceAccounts()
 	defer stream.Close()
@@ -191,19 +197,19 @@ func (h *Handler) asyncSubscribePrice(account solana.PublicKey, callback jsonrpc
 			Price:     update.CurrentInfo.Price,
 			Conf:      update.CurrentInfo.Conf,
 			Status:    statusToString(update.CurrentInfo.Status),
-			ValidSlot: update.CurrentInfo.PubSlot,
+			ValidSlot: update.Account.ValidSlot,
 			PubSlot:   update.CurrentInfo.PubSlot,
 		}
 		err := callback.AsyncRequestJSONRPC(context.Background(), "notify_price", subscriptionUpdate{
 			Result:       &price,
 			Subscription: subID,
 		})
-		if errors.Is(err, net.ErrClosed) {
-			stream.Close()
-		} else if err != nil {
+		if err != nil {
 			h.Log.Warn("Failed to deliver async price update", zap.Error(err))
 		}
 	})
+
+	<-callback.Done()
 }
 
 func (h *Handler) handleSubscribePriceSchedule(_ context.Context, req jsonrpc.Request, callback jsonrpc.Requester) *jsonrpc.Response {

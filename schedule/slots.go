@@ -3,6 +3,7 @@ package schedule
 import (
 	"context"
 	"errors"
+	"net"
 	"sync/atomic"
 	"time"
 
@@ -38,7 +39,7 @@ func (s *SlotMonitor) Run(ctx context.Context) error {
 	return backoff.Retry(func() error {
 		err := s.runConn(ctx)
 		switch {
-		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		case errors.Is(err, context.Canceled):
 			return backoff.Permanent(err)
 		default:
 			if ctxErr := ctx.Err(); ctxErr != nil {
@@ -99,7 +100,7 @@ func (s *SlotMonitor) readNextUpdate(ctx context.Context, sub *ws.SlotsUpdatesSu
 	if err != nil {
 		return err
 	} else if update == nil {
-		return nil
+		return net.ErrClosed
 	} else if update.Timestamp == nil {
 		ts := solana.UnixTimeSeconds(time.Now().Unix())
 		update.Timestamp = &ts

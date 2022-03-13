@@ -16,6 +16,7 @@ func (h HandleFunc) ServeJSONRPC(ctx context.Context, req Request, callback Requ
 }
 
 type Requester interface {
+	Done() <-chan struct{}
 	AsyncRequestJSONRPC(ctx context.Context, method string, params interface{}) error
 }
 
