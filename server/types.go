@@ -45,6 +45,14 @@ type publisherAccount struct {
 	Slot    uint64 `json:"slot"`
 }
 
+type priceUpdate struct {
+	Price     int64  `json:"price"`
+	Conf      uint64 `json:"conf"`
+	Status    string `json:"status"`
+	ValidSlot uint64 `json:"valid_slot"`
+	PubSlot   uint64 `json:"pub_slot"`
+}
+
 func productToJSON(product pyth.ProductAccountEntry, prices []pyth.PriceAccountEntry) productAccount {
 	acc := productAccount{
 		Account:  product.Pubkey.String(),

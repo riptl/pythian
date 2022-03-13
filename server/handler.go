@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"errors"
+	"net"
+	"sync/atomic"
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
@@ -10,6 +12,7 @@ import (
 	"go.blockdaemon.com/pyth"
 	"go.blockdaemon.com/pythian/jsonrpc"
 	"go.blockdaemon.com/pythian/schedule"
+	"go.uber.org/zap"
 )
 
 const (
@@ -19,10 +22,12 @@ const (
 
 type Handler struct {
 	*jsonrpc.Mux
+	Log       *zap.Logger
 	client    *pyth.Client
 	buffer    *schedule.Buffer
 	publisher solana.PublicKey
 	slots     *schedule.SlotMonitor
+	subNonce  int64
 }
 
 func NewHandler(
@@ -34,15 +39,18 @@ func NewHandler(
 	mux := jsonrpc.NewMux()
 	h := &Handler{
 		Mux:       mux,
+		Log:       zap.NewNop(),
 		client:    client,
 		buffer:    updateBuffer,
 		publisher: publisher,
 		slots:     slots,
+		subNonce:  1,
 	}
 	mux.HandleFunc("get_product_list", h.handleGetProductList)
 	mux.HandleFunc("get_product", h.handleGetProduct)
 	mux.HandleFunc("get_all_products", h.handleGetAllProducts)
 	mux.HandleFunc("update_price", h.handleUpdatePrice)
+	mux.HandleFunc("subscribe_price", h.handleSubscribePrice)
 	return h
 }
 
@@ -147,4 +155,59 @@ func (h *Handler) handleUpdatePrice(_ context.Context, req jsonrpc.Request, _ js
 	h.buffer.PushUpdate(ins)
 
 	return jsonrpc.NewResultResponse(req.ID, 0)
+}
+
+func (h *Handler) handleSubscribePrice(_ context.Context, req jsonrpc.Request, callback jsonrpc.Requester) *jsonrpc.Response {
+	if req.ID == nil {
+		return nil
+	}
+
+	// Decode params.
+	var params struct {
+		Account solana.PublicKey `json:"account"`
+	}
+	if err := mapstructure.Decode(req.Params, &params); err != nil {
+		return jsonrpc.NewInvalidParamsResponse(req.ID)
+	}
+	if params.Account.IsZero() {
+		return jsonrpc.NewInvalidParamsResponse(req.ID)
+	}
+
+	// Launch new subscription worker.
+	go h.asyncSubscribePrice(params.Account, callback)
+	return newSubscriptionResponse(req.ID, h.newSubID())
+}
+
+func (h *Handler) asyncSubscribePrice(account solana.PublicKey, callback jsonrpc.Requester) {
+	// TODO(richard): This is inefficient, no need to stream copy of all price updates for _each_ subscription.
+	stream := h.client.StreamPriceAccounts()
+	defer stream.Close()
+
+	handler := pyth.NewPriceEventHandler(stream)
+	handler.OnPriceChange(account, func(update pyth.PriceUpdate) {
+		err := callback.AsyncRequestJSONRPC(context.Background(), "notify_price", priceUpdate{
+			Price:     update.CurrentInfo.Price,
+			Conf:      update.CurrentInfo.Conf,
+			Status:    statusToString(update.CurrentInfo.Status),
+			ValidSlot: update.CurrentInfo.PubSlot,
+			PubSlot:   update.CurrentInfo.PubSlot,
+		})
+		if errors.Is(err, net.ErrClosed) {
+			stream.Close()
+		} else if err != nil {
+			h.Log.Warn("Failed to deliver async price update", zap.Error(err))
+		}
+	})
+}
+
+func newSubscriptionResponse(reqID interface{}, subID int64) *jsonrpc.Response {
+	var result struct {
+		Subscription int64 `json:"subscription"`
+	}
+	result.Subscription = subID
+	return jsonrpc.NewResultResponse(reqID, &result)
+}
+
+func (h *Handler) newSubID() int64 {
+	return atomic.AddInt64(&h.subNonce, 1)
 }
