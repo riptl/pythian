@@ -10,7 +10,6 @@ import (
 	"go.blockdaemon.com/pyth"
 	"go.blockdaemon.com/pythian/jsonrpc"
 	"go.blockdaemon.com/pythian/schedule"
-	"go.blockdaemon.com/pythian/signer"
 )
 
 const (
@@ -21,17 +20,24 @@ const (
 type Handler struct {
 	*jsonrpc.Mux
 	client    *pyth.Client
-	signer    *signer.Signer
-	blockhash *schedule.BlockHashMonitor
+	buffer    *schedule.Buffer
+	publisher solana.PublicKey
+	slots     *schedule.SlotMonitor
 }
 
-func NewHandler(client *pyth.Client, signer *signer.Signer, blockhash *schedule.BlockHashMonitor) *Handler {
+func NewHandler(
+	client *pyth.Client,
+	updateBuffer *schedule.Buffer,
+	publisher solana.PublicKey,
+	slots *schedule.SlotMonitor,
+) *Handler {
 	mux := jsonrpc.NewMux()
 	h := &Handler{
 		Mux:       mux,
 		client:    client,
-		signer:    signer,
-		blockhash: blockhash,
+		buffer:    updateBuffer,
+		publisher: publisher,
+		slots:     slots,
 	}
 	mux.HandleFunc("get_product_list", h.handleGetProductList)
 	mux.HandleFunc("get_product", h.handleGetProduct)
@@ -127,26 +133,18 @@ func (h *Handler) handleUpdatePrice(_ context.Context, req jsonrpc.Request, _ js
 		return jsonrpc.NewInvalidParamsResponse(req.ID)
 	}
 
-	// TODO(richard): Defer updates and publish according to schedule.
-	tx, err := solana.NewTransactionBuilder().
-		AddInstruction(
-			pyth.NewInstructionBuilder(h.client.Env.Program).
-				UpdPrice(h.signer.Pubkey(), params.Account, pyth.CommandUpdPrice{
-					Status:  statusFromString(params.Status),
-					Price:   params.Price,
-					Conf:    params.Conf,
-					PubSlot: 0, // TODO
-				}),
-		).
-		SetRecentBlockHash(h.blockhash.GetRecentBlockHash().Blockhash).
-		Build()
-	if err != nil {
-		return jsonrpc.NewErrorStringResponse(req.ID, rpcErrNotReady, "failed to assemble update_price tx: "+err.Error())
+	// Assemble instruction.
+	update := pyth.CommandUpdPrice{
+		Status:  statusFromString(params.Status),
+		Price:   params.Price,
+		Conf:    params.Conf,
+		PubSlot: h.slots.Slot(),
 	}
+	ins := pyth.NewInstructionBuilder(h.client.Env.Program).
+		UpdPrice(h.publisher, params.Account, update).(*pyth.Instruction)
 
-	if err := h.signer.SignPriceUpdate(tx); err != nil {
-		return jsonrpc.NewErrorStringResponse(req.ID, rpcErrNotReady, "failed to sign update_price tx: "+err.Error())
-	}
+	// Push instruction to write buffer. (Will be picked up by scheduler)
+	h.buffer.PushUpdate(ins)
 
 	return jsonrpc.NewResultResponse(req.ID, 0)
 }

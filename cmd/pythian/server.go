@@ -84,20 +84,28 @@ func runServer(_ *cobra.Command, _ []string) {
 
 	// Create slot monitor.
 	log.Info("Starting slot monitor")
-	slots := schedule.NewSchedule(solanaWsUrl.String())
+	slots := schedule.NewSlotMonitor(solanaWsUrl.String())
 	slots.Log = log.Named("slots")
 	group.Go(func() error {
 		defer log.Info("Stopped slot monitor")
 		return slots.Run(ctx)
 	})
+
+	// Create update buffer.
+	buffer := schedule.NewBuffer()
+
+	// Create scheduler.
+	sched := schedule.NewScheduler(buffer, blockhashes, txSigner)
+	sched.Log = log.Named("scheduler")
+	log.Info("Starting publish scheduler")
 	group.Go(func() error {
-		for range slots.Updates() {
-		}
+		defer log.Info("Stopped publish scheduler")
+		sched.Run(slots.Updates())
 		return nil
 	})
 
 	// Create Pythian JSON-RPC handler.
-	rpc := pythian_server.NewHandler(pythClient, txSigner, blockhashes)
+	rpc := pythian_server.NewHandler(pythClient, buffer, txSigner.Pubkey(), slots)
 
 	// Start HTTP server.
 	log.Info("Starting HTTP server", zap.String("listen", serverListenFlag))

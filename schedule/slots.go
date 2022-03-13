@@ -3,6 +3,7 @@ package schedule
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -11,15 +12,16 @@ import (
 	"go.uber.org/zap"
 )
 
-type Schedule struct {
+type SlotMonitor struct {
 	Log          *zap.Logger
 	WebSocketURL string
 
-	updates chan *ws.SlotsUpdatesResult
+	updates  chan *ws.SlotsUpdatesResult
+	lastSlot uint64
 }
 
-func NewSchedule(wsURL string) *Schedule {
-	return &Schedule{
+func NewSlotMonitor(wsURL string) *SlotMonitor {
+	return &SlotMonitor{
 		Log:          zap.NewNop(),
 		WebSocketURL: wsURL,
 
@@ -27,7 +29,7 @@ func NewSchedule(wsURL string) *Schedule {
 	}
 }
 
-func (s *Schedule) Run(ctx context.Context) error {
+func (s *SlotMonitor) Run(ctx context.Context) error {
 	defer close(s.updates)
 	const retryInterval = 3 * time.Second
 	return backoff.Retry(func() error {
@@ -45,7 +47,7 @@ func (s *Schedule) Run(ctx context.Context) error {
 	}, backoff.WithContext(backoff.NewConstantBackOff(retryInterval), ctx))
 }
 
-func (s *Schedule) runConn(ctx context.Context) error {
+func (s *SlotMonitor) runConn(ctx context.Context) error {
 	client, err := ws.Connect(ctx, s.WebSocketURL)
 	if err != nil {
 		return err
@@ -74,7 +76,7 @@ func (s *Schedule) runConn(ctx context.Context) error {
 	}
 }
 
-func (s *Schedule) readNextUpdate(ctx context.Context, sub *ws.SlotsUpdatesSubscription) error {
+func (s *SlotMonitor) readNextUpdate(ctx context.Context, sub *ws.SlotsUpdatesSubscription) error {
 	// If no update comes in within 20 seconds, bail.
 	const readTimeout = 20 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
@@ -104,6 +106,7 @@ func (s *Schedule) readNextUpdate(ctx context.Context, sub *ws.SlotsUpdatesSubsc
 	if update.Type != ws.SlotsUpdatesFirstShredReceived {
 		return nil
 	}
+	atomic.StoreUint64(&s.lastSlot, update.Slot)
 
 	select {
 	case <-ctx.Done():
@@ -117,6 +120,12 @@ func (s *Schedule) readNextUpdate(ctx context.Context, sub *ws.SlotsUpdatesSubsc
 	return nil
 }
 
-func (s *Schedule) Updates() <-chan *ws.SlotsUpdatesResult {
+// Updates the single current update channel.
+func (s *SlotMonitor) Updates() <-chan *ws.SlotsUpdatesResult {
 	return s.updates
+}
+
+// Slot returns the slot number that the cluster is currently processing. 0 if unknown.
+func (s *SlotMonitor) Slot() uint64 {
+	return atomic.LoadUint64(&s.lastSlot)
 }
