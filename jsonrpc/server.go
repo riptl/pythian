@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -86,18 +87,20 @@ func (s *Server) getLog(req *http.Request) *zap.Logger {
 
 // serverConn manages the server-side of a single connection.
 type serverConn struct {
-	conn   *websocket.Conn
-	out    chan *websocket.PreparedMessage
-	log    *zap.Logger
-	server *Server
+	conn    *websocket.Conn
+	out     chan *websocket.PreparedMessage
+	log     *zap.Logger
+	server  *Server
+	onClose chan struct{}
 }
 
 func newServerConn(conn *websocket.Conn, log *zap.Logger, server *Server) *serverConn {
 	return &serverConn{
-		conn:   conn,
-		out:    make(chan *websocket.PreparedMessage),
-		log:    log,
-		server: server,
+		conn:    conn,
+		out:     make(chan *websocket.PreparedMessage),
+		log:     log,
+		server:  server,
+		onClose: make(chan struct{}),
 	}
 }
 
@@ -110,6 +113,11 @@ func (h *serverConn) run(ctx context.Context) {
 	})
 	group.Go(func() error {
 		return h.readLoop(ctx)
+	})
+	group.Go(func() error {
+		defer close(h.onClose)
+		<-ctx.Done()
+		return nil
 	})
 	_ = group.Wait()
 }
@@ -187,6 +195,8 @@ func (h *serverConn) close() {
 }
 
 // AsyncRequestJSONRPC sends a JSON-RPC notification from server to client.
+//
+// Returns net.ErrClosed if the underlying connection has been closed already.
 func (h *serverConn) AsyncRequestJSONRPC(ctx context.Context, method string, params interface{}) error {
 	// Encode request to JSON.
 	req := Request{
@@ -208,6 +218,8 @@ func (h *serverConn) AsyncRequestJSONRPC(ctx context.Context, method string, par
 
 	// Blocking send to writer thread.
 	select {
+	case <-h.onClose:
+		return net.ErrClosed
 	case <-ctx.Done():
 		return ctx.Err()
 	case h.out <- msg:
