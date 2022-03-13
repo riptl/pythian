@@ -135,7 +135,7 @@ func (h *serverConn) readLoop(ctx context.Context) error {
 			continue
 		}
 		// Execute requests.
-		respData, err := HandleRequests(ctx, h.server.Handler, nil, reqs, isBatch)
+		respData, err := HandleRequests(ctx, h.server.Handler, h, reqs, isBatch)
 		if err != nil {
 			return fmt.Errorf("failed to marshal results: %w", err) // irrecoverable error
 		}
@@ -184,4 +184,33 @@ func (h *serverConn) writeLoop(ctx context.Context) error {
 
 func (h *serverConn) close() {
 	_ = h.conn.Close()
+}
+
+// AsyncRequestJSONRPC sends a JSON-RPC notification from server to client.
+func (h *serverConn) AsyncRequestJSONRPC(ctx context.Context, method string, params interface{}) error {
+	// Encode request to JSON.
+	req := Request{
+		Version: Version,
+		ID:      Null,
+		Method:  method,
+		Params:  params,
+	}
+	buf, err := json.Marshal(&req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request params: %w", err)
+	}
+
+	// Create new WebSocket message.
+	msg, err := websocket.NewPreparedMessage(websocket.TextMessage, buf)
+	if err != nil {
+		return err
+	}
+
+	// Blocking send to writer thread.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case h.out <- msg:
+		return nil
+	}
 }

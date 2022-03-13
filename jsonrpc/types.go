@@ -6,9 +6,10 @@ import (
 )
 
 type Request struct {
-	ID     interface{} `json:"id,omitempty"`
-	Method string      `json:"method,omitempty"`
-	Params interface{} `json:"params,omitempty"`
+	Version string      `json:"jsonrpc,omitempty"`
+	ID      interface{} `json:"id,omitempty"`
+	Method  string      `json:"method,omitempty"`
+	Params  interface{} `json:"params,omitempty"`
 }
 
 type Response struct {
