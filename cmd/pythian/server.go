@@ -35,7 +35,7 @@ func init() {
 	rootCmd.AddCommand(&serverCmd)
 	serverFlags.AddFlagSet(cmd.FlagSetRPC)
 	serverFlags.AddFlagSet(cmd.FlagSetSigner)
-	serverFlags.StringVar(&serverListenFlag, "listen", ":8090", "Listen address")
+	serverFlags.StringVar(&serverListenFlag, "listen", ":8910", "Listen address")
 }
 
 func runServer(_ *cobra.Command, _ []string) {

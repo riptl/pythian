@@ -65,7 +65,8 @@ func (s *Scheduler) tick(ctx context.Context, update *ws.SlotsUpdatesResult) {
 		s.Log.Error("Failed to sign transaction", zap.Error(err))
 	}
 
-	s.Log.Info("Submitting price update",
+	s.Log.Debug("Submitting price update",
+		zap.Stringer("publisher", &tx.Message.AccountKeys[0]),
 		zap.Int("updates", len(tx.Message.Instructions)))
 
 	s.wg.Add(1)
@@ -83,5 +84,7 @@ func (s *Scheduler) sendTransaction(ctx context.Context, tx *solana.Transaction)
 		return
 	}
 
-	s.Log.Info("Sent transaction", zap.Stringer("signature", sig))
+	s.Log.Info("Sent transaction",
+		zap.Stringer("signature", sig),
+		zap.Int("updates", len(tx.Message.Instructions)))
 }
