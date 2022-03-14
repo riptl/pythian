@@ -110,6 +110,9 @@ func newServerConn(conn *websocket.Conn, log *zap.Logger, server *Server) *serve
 func (h *serverConn) run(ctx context.Context) {
 	defer h.dropOut()
 
+	metricWSConns.Inc()
+	defer metricWSConns.Dec()
+
 	group, ctx := errgroup.WithContext(ctx)
 	group.Go(func() error {
 		return h.writeLoop(ctx)
@@ -224,6 +227,8 @@ func (h *serverConn) AsyncRequestJSONRPC(ctx context.Context, method string, par
 	if err != nil {
 		return err
 	}
+
+	metricCallbacks.WithLabelValues(method).Inc()
 
 	// Blocking send to writer thread.
 	h.outLock.RLock()

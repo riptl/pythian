@@ -87,4 +87,7 @@ func (s *Scheduler) sendTransaction(ctx context.Context, tx *solana.Transaction)
 	s.Log.Info("Sent transaction",
 		zap.Stringer("signature", sig),
 		zap.Int("updates", len(tx.Message.Instructions)))
+	metricTxsSent.
+		WithLabelValues(tx.Message.AccountKeys[0].String()).
+		Inc()
 }

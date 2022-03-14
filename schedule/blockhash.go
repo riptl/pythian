@@ -61,6 +61,7 @@ func (b *BlockHashMonitor) tick(ctx context.Context) error {
 	}
 	b.Log.Debug("Updated recent block hash", zap.Stringer("blockhash", &res.Value.Blockhash))
 	b.hash.Store(res.Value)
+	metricBlockhashUpdates.Inc()
 	return nil
 }
 

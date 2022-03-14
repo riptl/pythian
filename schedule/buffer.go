@@ -36,7 +36,14 @@ func (b *Buffer) PushUpdate(ins *pyth.Instruction) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
-	b.updates[accs[1].PublicKey] = ins
+	publishAcc := accs[0].PublicKey
+	priceAcc := accs[1].PublicKey
+	if _, ok := b.updates[priceAcc]; ok {
+		metricUpdatesDropped.
+			WithLabelValues(publishAcc.String(), priceAcc.String(), "replaced").
+			Inc()
+	}
+	b.updates[priceAcc] = ins
 }
 
 // Flush removes all queued instructions and places them into an unsigned transaction.
@@ -67,13 +74,22 @@ func (b *Buffer) appendUpdateToBuilder(builder *solana.TransactionBuilder, insn 
 	if !ok {
 		return false
 	}
+	accs := insn.Accounts()
+	publishAccStr := accs[0].PublicKey.String()
+	priceAccStr := accs[1].PublicKey.String()
 	if update.PubSlot < minSlot {
 		b.Log.Warn("Dropping price update",
-			zap.Stringer("price", insn.Accounts()[1].PublicKey),
+			zap.String("price", priceAccStr),
 			zap.Uint64("pub_slot", update.PubSlot),
 			zap.Uint64("min_slot", minSlot))
+		metricUpdatesDropped.
+			WithLabelValues(publishAccStr, priceAccStr, "replaced").
+			Inc()
 		return false
 	}
+	metricUpdatesSent.
+		WithLabelValues(publishAccStr, priceAccStr).
+		Inc()
 	builder.AddInstruction(insn)
 	return true
 }

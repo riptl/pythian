@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	solana_rpc "github.com/gagliardetto/solana-go/rpc"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 	"go.blockdaemon.com/pyth"
 	"go.blockdaemon.com/pythian/cmd"
@@ -117,6 +118,7 @@ func runServer(_ *cobra.Command, _ []string) {
 
 		rpcServer := jsonrpc.NewServer(rpc)
 		http.Handle("/", rpcServer)
+		http.Handle("/metrics", promhttp.Handler())
 
 		server := http.Server{Addr: serverListenFlag}
 		go func() {

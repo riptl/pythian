@@ -23,5 +23,6 @@ func (m *Mux) ServeJSONRPC(ctx context.Context, req Request, callback Requester)
 	if handler == nil {
 		return NewMethodNotFoundResponse(req.ID)
 	}
+	metricRequests.WithLabelValues(req.Method).Inc()
 	return handler.ServeJSONRPC(ctx, req, callback)
 }

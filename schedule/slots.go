@@ -113,6 +113,7 @@ func (s *SlotMonitor) readNextUpdate(ctx context.Context, sub *ws.SlotsUpdatesSu
 	atomic.StoreUint64(&s.lastSlot, update.Slot)
 
 	s.bus.Publish(busKey, update.Slot)
+	metricSlotUpdates.Inc()
 
 	select {
 	case <-ctx.Done():
