@@ -150,7 +150,7 @@ func (h *Handler) handleUpdatePrice(_ context.Context, req jsonrpc.Request, _ js
 		PubSlot: h.slots.Slot(),
 	}
 	ins := pyth.NewInstructionBuilder(h.client.Env.Program).
-		UpdPrice(h.publisher, params.Account, update)
+		UpdPriceNoFailOnError(h.publisher, params.Account, update)
 
 	// Push instruction to write buffer. (Will be picked up by scheduler)
 	h.buffer.PushUpdate(ins)
