@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/asaskevich/EventBus v0.0.0-20200907212545-49d423059eef
-	github.com/cenkalti/backoff/v4 v4.1.2
+	github.com/cenkalti/backoff/v4 v4.1.3
 	github.com/gagliardetto/solana-go v1.3.1-0.20220222155336-dd0af958252d
 	github.com/gorilla/websocket v1.5.0
 	github.com/mitchellh/mapstructure v1.4.3
