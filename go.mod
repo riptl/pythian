@@ -7,7 +7,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.1.3
 	github.com/gagliardetto/solana-go v1.3.1-0.20220222155336-dd0af958252d
 	github.com/gorilla/websocket v1.5.0
-	github.com/mitchellh/mapstructure v1.4.3
+	github.com/mitchellh/mapstructure v1.5.0
 	github.com/prometheus/client_golang v1.12.1
 	github.com/spf13/cobra v1.4.0
 	github.com/spf13/pflag v1.0.5
